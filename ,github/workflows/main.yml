@@ -1,0 +1,38 @@
+name: Flight Offers Logger
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # 30분마다 실행 (원하는 주기로 수정)
+  workflow_dispatch:
+
+jobs:
+  log_flights:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install amadeus python-dotenv
+
+      - name: Run logger
+        env:
+          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
+          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
+          AMADEUS_HOSTNAME: ${{ secrets.AMADEUS_HOSTNAME }} # test or production
+        run: python flight_search.py
+
+      - name: Commit & Push CSV
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions@github.com"
+          git add flight_offers.csv
+          git commit -m "Update flight offers (auto)" || echo "No changes"
+          git push
