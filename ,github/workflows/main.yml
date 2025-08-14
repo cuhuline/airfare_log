@@ -2,8 +2,11 @@ name: Flight Offers Logger
 
 on:
   schedule:
-    - cron: "*/1 * * * *"   # 30분마다 실행 (원하는 주기로 수정)
+    - cron: "*/10 * * * *"   # 10분 권장 (1분은 종종 스킵됨)
   workflow_dispatch:
+
+permissions:
+  contents: write   # Actions가 커밋/푸시할 권한
 
 jobs:
   log_flights:
@@ -11,6 +14,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # pull --rebase 대비
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -20,19 +25,26 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          python -m pip install amadeus python-dotenv
+          pip install amadeus python-dotenv
 
       - name: Run logger
         env:
           AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
           AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
-          AMADEUS_HOSTNAME: ${{ secrets.AMADEUS_HOSTNAME }} # test or production
+          AMADEUS_HOSTNAME: ${{ secrets.AMADEUS_HOSTNAME }}  # test or production
+          ORIGIN: ICN
+          DEST: NRT
+          CURRENCY: KRW
+          MAX_RESULTS: 5
+          # DEPARTURE_DATE: "2025-08-15"
+          # AIRLINE: "7C"
         run: python flight_search.py
 
       - name: Commit & Push CSV
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions@github.com"
+          git pull --rebase
           git add flight_offers.csv
           git commit -m "Update flight offers (auto)" || echo "No changes"
           git push
