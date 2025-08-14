@@ -2,7 +2,7 @@ name: Flight Offers Logger
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # 10분 권장 (1분은 종종 스킵됨)
+    - cron:    # 10분 권장 (1분은 종종 스킵됨)
   workflow_dispatch:
 
 permissions:
