@@ -2,7 +2,7 @@ name: Flight Offers Logger
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # 30분마다 실행 (원하는 주기로 수정)
+    - cron: "*/1 * * * *"   # 30분마다 실행 (원하는 주기로 수정)
   workflow_dispatch:
 
 jobs:
