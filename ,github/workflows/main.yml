@@ -1,21 +1,27 @@
-name: Flight Offers Logger
+name: Run flight_search
 
 on:
+  workflow_dispatch:           # 수동 실행 버튼 유지
   schedule:
-    - cron:    # 10분 권장 (1분은 종종 스킵됨)
-  workflow_dispatch:
+    - cron: "*/5 * * * *"     # 20분마다 (UTC 기준)
 
+# CSV 커밋/푸시 권한
 permissions:
-  contents: write   # Actions가 커밋/푸시할 권한
+  contents: write
+
+# 동시 실행 방지(이전 실행이 길어질 때 겹치지 않도록)
+concurrency:
+  group: flight_search
+  cancel-in-progress: true
 
 jobs:
-  log_flights:
+  run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0       # pull --rebase 대비
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -25,26 +31,37 @@ jobs:
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install amadeus python-dotenv
+          python -m pip install -r requirements.txt
 
-      - name: Run logger
-        env:
-          AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
-          AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
-          AMADEUS_HOSTNAME: ${{ secrets.AMADEUS_HOSTNAME }}  # test or production
-          ORIGIN: ICN
-          DEST: NRT
-          CURRENCY: KRW
-          MAX_RESULTS: 5
-          # DEPARTURE_DATE: "2025-08-15"
-          # AIRLINE: "7C"
+      # 멀티라인 시크릿을 환경변수로 export (CR 제거)
+      - name: Export secrets to env
+        shell: bash
+        run: |
+          printf "%s\n" "${{ secrets.FLIGHT_API_KEY }}" | tr -d '\r' >> "$GITHUB_ENV"
+
+      # 못 찾더라도 실패하지 않게
+      - name: Debug env presence
+        shell: bash
+        run: |
+          env | grep -E 'AMADEUS_CLIENT_ID|AMADEUS_CLIENT_SECRET|AMADEUS_HOSTNAME' \
+            | sed 's/=.*/=***redacted***/' || true
+
+      - name: Run script
         run: python flight_search.py
 
-      - name: Commit & Push CSV
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: offers
+          path: |
+            data/*.csv
+            offers_*_*.csv
+          if-no-files-found: ignore
+
+      - name: Commit and push data
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions@github.com"
-          git pull --rebase
-          git add flight_offers.csv
-          git commit -m "Update flight offers (auto)" || echo "No changes"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/*.csv || true
+          git commit -m "data: append $(date -u +'%F %T') [skip ci]" || echo "No changes"
           git push
