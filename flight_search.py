@@ -1,116 +1,86 @@
-# flight_search.py
+# -*- coding: utf-8 -*-
+# python flight_search.py
 from amadeus import Client, ResponseError
-from dotenv import load_dotenv, find_dotenv
-from datetime import datetime
-from zoneinfo import ZoneInfo
-import os, csv
-from typing import Any
-
-# .env(로컬) → Actions에선 secrets로 주입됨
-load_dotenv(find_dotenv())
-
-CLIENT_ID = os.getenv("AMADEUS_CLIENT_ID")
-CLIENT_SECRET = os.getenv("AMADEUS_CLIENT_SECRET")
-HOSTNAME = os.getenv("AMADEUS_HOSTNAME", "test")     # test | production
-
-# 검색 파라미터(원하면 Actions env에서 바꿔주면 됨)
-ORIGIN = os.getenv("ORIGIN", "ICN")
-DEST   = os.getenv("DEST", "NRT")
-CURRENCY = os.getenv("CURRENCY", "KRW")
-AIRLINE  = os.getenv("AIRLINE", "")                  # 특정 항공사만 원하면 예: "7C"
-MAX_RESULTS = int(os.getenv("MAX_RESULTS", "5"))     # 저장 개수
-DEPARTURE_DATE = os.getenv("DEPARTURE_DATE", "")     # 고정 날짜가 필요하면 YYYY-MM-DD. 빈 값이면 '오늘(서울)'
-
-CSV_PATH = "flight_offers.csv"
-
-if not CLIENT_ID or not CLIENT_SECRET:
-    raise RuntimeError("AMADEUS_CLIENT_ID / AMADEUS_CLIENT_SECRET 이 필요합니다.")
-
-amadeus = Client(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, hostname=HOSTNAME)
-
-def ensure_csv(path: str):
+from dotenv import load_dotenv  # type: ignore
+import os
+from typing import Any, Dict, List
+from pathlib import Path
+from datetime import datetime, timezone
+import csv
+load_dotenv()
+amadeus = Client(
+    client_id=os.getenv("AMADEUS_CLIENT_ID"),
+    client_secret=os.getenv("AMADEUS_CLIENT_SECRET"),
+    hostname=os.getenv("AMADEUS_HOSTNAME", "test"),
+)
+DATA_DIR = Path(__file__).with_name("data")
+DATA_DIR.mkdir(exist_ok=True)
+def csv_path(origin: str, dest: str, airline: str) -> Path:
+    return DATA_DIR / f"prices_{origin.lower()}-{dest.lower()}_{airline.lower()}.csv"
+def append_row(path: Path, row: Dict[str, Any]) -> None:
     header = [
-        "logged_at","search_date","origin","destination",
-        "dep_airport","dep_time","arr_airport","arr_time",
-        "airline","flight_no","stops","duration",
-        "price_total","currency","baggage"
+        "collected_at_utc","travel_date","origin","dest","airline",
+        "flight_no","dep_time","arr_time","stops","duration","price","currency"
     ]
-    if not os.path.exists(path) or os.path.getsize(path) == 0:
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(header)
-
-def carrier_name(code: str, dictionaries: dict[str, Any]) -> str:
-    return dictionaries.get("carriers", {}).get(code, code)
-
-def parse_baggage(offer: dict[str, Any]) -> str:
-    for tp in offer.get("travelerPricings", []):
-        for fd in tp.get("fareDetailsBySegment", []):
-            inc = (fd.get("includedCheckedBags") or {})
-            if "quantity" in inc:
-                return f'Checked x{inc["quantity"]}'
-            if "weight" in inc and "weightUnit" in inc:
-                return f'Checked {inc["weight"]}{inc["weightUnit"]}'
-    return ""
-
-def pick_first(offer: dict[str, Any]):
-    it = offer["itineraries"][0]
-    segs = it["segments"]
-    dep = segs[0]["departure"]
-    arr = segs[-1]["arrival"]
-    return it, segs, dep, arr
-
+    is_new = not path.exists()
+    with path.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=header)
+        if is_new:
+            w.writeheader()
+        w.writerow(row)
 def main():
-    ensure_csv(CSV_PATH)
-
-    kr_now = datetime.now(ZoneInfo("Asia/Seoul"))
-    search_date = DEPARTURE_DATE or kr_now.date().isoformat()  # 오늘 또는 지정일
+    origin = "ICN"
+    dest = "NRT"
+    travel_date = "2025-08-25"
+    lcc_codes = ["KE","OZ","7C","TW","LJ","ZE","RS","BX","YP"]
     params = {
-        "originLocationCode": ORIGIN,
-        "destinationLocationCode": DEST,
-        "departureDate": search_date,
+        "originLocationCode": origin,
+        "destinationLocationCode": dest,
+        "departureDate": travel_date,
         "adults": 1,
-        "currencyCode": CURRENCY,
-        "max": MAX_RESULTS
+        "currencyCode": "KRW",
+        "includedAirlineCodes": ",".join(lcc_codes),
+        "max": 250,
     }
-    if AIRLINE:
-        params["includedAirlineCodes"] = AIRLINE
-
     try:
-        resp = amadeus.shopping.flight_offers_search.get(**params)
-        offers = resp.data
-        dic = getattr(resp, "result", {}).get("dictionaries", {})
+        r = amadeus.shopping.flight_offers_search.get(**params)
+        offers: List[Dict[str, Any]] = r.data or []
         if not offers:
-            print("검색 결과 없음")
+            print("검색 결과가 없습니다.")
             return
-
-        with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            for o in offers:
-                it, segs, dep, arr = pick_first(o)
-                dep_airport, arr_airport = dep["iataCode"], arr["iataCode"]
-                dep_time, arr_time = dep["at"], arr["at"]
-                airline = carrier_name(segs[0]["carrierCode"], dic)
-                flight_no = f'{segs[0]["carrierCode"]}{segs[0]["number"]}'
-                stops = len(segs) - 1
-                duration = it.get("duration", "")
-                price_total = o["price"]["grandTotal"]
-                currency = o["price"]["currency"]
-                baggage = parse_baggage(o)
-
-                w.writerow([
-                    kr_now.strftime("%Y-%m-%d %H:%M:%S"),
-                    search_date, ORIGIN, DEST,
-                    dep_airport, dep_time, arr_airport, arr_time,
-                    airline, flight_no, stops, duration,
-                    price_total, currency, baggage
-                ])
-
-        print(f"✅ Saved {len(offers)} to {CSV_PATH} (date={search_date}, {ORIGIN}->{DEST})")
-
+        best: Dict[str, Dict[str, Any]] = {}
+        for o in offers:
+            it = o["itineraries"][0]
+            segs = it["segments"]
+            airline = segs[0]["carrierCode"]
+            if airline not in lcc_codes:
+                continue
+            price = float(o["price"]["grandTotal"])
+            if (airline not in best) or (price < float(best[airline]["price"]["grandTotal"])):
+                best[airline] = o
+        now_utc = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        for al, o in sorted(best.items()):
+            it = o["itineraries"][0]
+            segs = it["segments"]
+            dep = segs[0]["departure"]
+            arr = segs[-1]["arrival"]
+            row = {
+                "collected_at_utc": now_utc,
+                "travel_date": travel_date,
+                "origin": origin,
+                "dest": dest,
+                "airline": al,
+                "flight_no": f'{segs[0]["carrierCode"]}{segs[0]["number"]}',
+                "dep_time": dep["at"],
+                "arr_time": arr["at"],
+                "stops": len(segs) - 1,
+                "duration": it.get("duration",""),
+                "price": float(o["price"]["grandTotal"]),
+                "currency": o["price"]["currency"],
+            }
+            append_row(csv_path(origin, dest, al), row)
+            print(f"{al}: {row['price']:.0f} {row['currency']} 저장됨")
     except ResponseError as e:
-        # 디버깅이 필요하면 아래 주석 해제
-        # print(e.response.result)
-        raise
-
+        print("Flight Offers Search 오류:", e)
 if __name__ == "__main__":
     main()
